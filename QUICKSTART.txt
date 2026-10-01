@@ -1,0 +1,144 @@
+ESP32-S3 HOBBY COMMAND REFERENCE
+==============================
+
+EVERYDAY WORKFLOW
+1. Connect a data-capable cable to the connector labeled USB.
+2. Edit and save src/main.cpp.
+3. Stop any open serial monitor with Ctrl+C.
+4. Run: bash esp32.sh upload
+5. If stuck in download mode, release BOOT and press/release RESET.
+6. Run: bash esp32.sh monitor
+7. Hello World prints once per second. Ctrl+C closes the monitor.
+
+The helper changes to the project folder itself. From another folder, pass
+the full path to esp32.sh. Running it without an action displays help.
+
+SHORT COMMANDS                    UNDERLYING PLATFORMIO COMMANDS
+bash esp32.sh build               pio run
+bash esp32.sh upload              pio run --target upload
+bash esp32.sh monitor             pio device monitor
+bash esp32.sh ports               pio device list
+bash esp32.sh clean               pio run --target clean
+bash esp32.sh compiledb           pio run --target compiledb
+bash esp32.sh verbose             pio run -v
+bash esp32.sh notes               Print this reference
+bash esp32.sh help                Print helper usage
+
+Upload already builds first. Clean removes generated build output, not source.
+compiledb updates compile_commands.json for editor header navigation.
+Underlying pio commands should be run from the project folder.
+
+ZED
+Open the command palette and choose "task: spawn".
+Select ESP32: Build, Upload, Monitor, List ports, Clean, or Generate compile
+commands. These tasks use the same platformio.ini as the Bash helper.
+Save your files first; the build/upload tasks also save open buffers.
+
+MANUAL BOARD BUTTONS
+To start the uploaded program:
+  Release BOOT. Press and release RESET (also called RST or EN).
+  Do NOT hold BOOT during this reset.
+
+To enter download mode when uploading cannot connect:
+  Hold BOOT. Press and release RESET. Release BOOT. Retry upload.
+  After upload, use the normal reset above if it still waits for download.
+
+BOOT selects download mode during reset. RESET restarts the chip.
+The program remains in flash after unplugging; reconnecting normally starts it.
+
+CONFIGURATION: platformio.ini
+The authoritative settings are in platformio.ini. Edit that file, not this
+reference or the helper, when changing your setup.
+
+platform = espressif32@6.12.0
+  Pins the ESP32 build recipes and dependency versions. Leave this alone for
+  ordinary code changes. Change deliberately when upgrading; rebuild afterward.
+
+board = esp32-s3-devkitc-1
+  Selects ESP32-S3 compiler and board defaults. Change for a different board.
+  This profile assumes 8 MB flash and no enabled PSRAM. A module with different
+  flash/PSRAM may need additional board settings; identify its exact module first.
+
+framework = arduino
+  Enables Arduino C++ with setup() and loop(). Changing to espidf requires
+  changing the program structure too.
+
+monitor_speed = 115200
+  Match Serial.begin(115200) in your code, especially with UART serial.
+  Native USB CDC does not use the baud rate in the same way as a physical UART.
+
+monitor_rts = 0
+monitor_dtr = 0
+  Saves the control-line settings from the monitor command that worked here.
+  You can now use just "pio device monitor" or "bash esp32.sh monitor".
+  Equivalent explicit command: pio device monitor --rts 0 --dtr 0
+
+upload_port = /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_D0:CF:13:43:69:D4-if00
+  Identifies THIS board. Another board usually has a different serial ID.
+  Find devices with "bash esp32.sh ports" and "ls -l /dev/serial/by-id/".
+  Change upload_port to the new path. Prefer /dev/serial/by-id/ over ttyACM0:
+  the ttyACM number can change when devices are connected in another order.
+  The monitor_port and test_port settings inherit upload_port automatically.
+
+build_flags =
+  -DARDUINO_USB_MODE=1
+  -DARDUINO_USB_CDC_ON_BOOT=1
+  Makes Serial use the ESP32-S3's native USB Serial/JTAG CDC interface at boot.
+  Keep these for this setup through the USB connector. Other chips or using the
+  UART connector may require different flags and port settings.
+
+ADDING A SERVO LIBRARY LATER
+Add under the existing [env:esp32-s3-devkitc-1] section:
+  lib_deps =
+    madhephaestus/ESP32Servo
+
+Then use #include <ESP32Servo.h> in your C++ source.
+PlatformIO installs the library on the next build. Check the library's supported
+Arduino versions if you later upgrade dependencies. Hello World needs no library.
+
+COMMON PROBLEMS
+"waiting for download"
+  Release BOOT, then press/release RESET. Or reconnect USB without holding BOOT.
+
+No port found
+  Check the USB connector and a data-capable cable. Run the ports helper.
+  Check whether the device ID in platformio.ini matches the connected board.
+
+Port busy
+  Close all other serial monitors (including monitors in other editor windows).
+
+Permission denied on a serial port (Linux Mint)
+  Check "ls -l /dev/ttyACM0" and "id -nG". If the device belongs to dialout and
+  your account is not in that group, run:
+    sudo usermod -aG dialout "$USER"
+  Log out and back in for membership to take effect.
+
+pio: command not found
+  Check "command -v pio" and "pio --version" in your normal terminal.
+  Current installation: /home/kaleb/.local/bin/pio
+  Start Zed from a terminal where pio works if its tasks cannot find pio.
+
+Arduino headers not found in the editor
+  Run: bash esp32.sh compiledb
+  In Zed's command palette, run "editor: restart language server".
+  .zed/settings.json lets clangd query this ESP32-S3 compiler for system headers.
+  .clangd removes GCC-only options from editor parsing, not real builds.
+  If moving to another computer or toolchain, update the --query-driver path
+  in .zed/settings.json to match the installed compiler location.
+  Regenerate compiledb after adding libraries or changing board/build settings.
+
+HOW IT BUILDS
+PlatformIO reads platformio.ini and runs SCons build recipes.
+An ESP32-S3 cross compiler turns your source into object files (.o).
+The linker combines those with Arduino code using the target memory layout,
+producing firmware.elf. The image tool creates firmware.bin.
+Upload writes the program and boot images into the board's flash.
+Monitor only reads serial output; it does not build or upload.
+Generated output: .pio/build/esp32-s3-devkitc-1/
+Arduino calls setup() once, then loop() repeatedly.
+
+Documentation:
+https://docs.platformio.org/en/latest/core/userguide/cmd_run.html
+https://docs.platformio.org/en/latest/core/userguide/device/cmd_monitor.html
+https://docs.platformio.org/en/latest/projectconf/index.html
+https://zed.dev/docs/tasks

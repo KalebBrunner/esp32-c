@@ -1,0 +1,61 @@
+[
+  {
+    "label": "ESP32: Build",
+    "command": "pio",
+    "args": [
+      "run"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all"
+  },
+  {
+    "label": "ESP32: Upload",
+    "command": "pio",
+    "args": [
+      "run",
+      "--target",
+      "upload"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all"
+  },
+  {
+    "label": "ESP32: Monitor",
+    "command": "pio",
+    "args": [
+      "device",
+      "monitor"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "ESP32: Clean",
+    "command": "pio",
+    "args": [
+      "run",
+      "--target",
+      "clean"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "ESP32: List ports",
+    "command": "pio",
+    "args": [
+      "device",
+      "list"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+  {
+    "label": "ESP32: Generate compile commands",
+    "command": "pio",
+    "args": [
+      "run",
+      "--target",
+      "compiledb"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all"
+  }
+]

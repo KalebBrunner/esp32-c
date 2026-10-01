@@ -1,0 +1,7 @@
+# Editor parsing only; PlatformIO still uses all flags for real builds.
+CompileFlags:
+  CompilationDatabase: .
+  Remove:
+    - -mlongcalls
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
