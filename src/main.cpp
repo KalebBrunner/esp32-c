@@ -2,111 +2,149 @@
 #include <esp_timer.h>
 #include <soc/gpio_struct.h>
 
-constexpr uint8_t ENCODER_A_PIN = 4;
-constexpr uint8_t ENCODER_B_PIN = 5;
-constexpr uint8_t ENCODER_INDEX_PIN = 6;
-constexpr bool INDEX_CONNECTED = false;
-constexpr int32_t ENCODER_PPR = 2048;
-constexpr int32_t COUNTS_PER_REVOLUTION = ENCODER_PPR * 4;
-constexpr int DIRECTION_SIGN = 1;
-constexpr uint32_t DISPLAY_INTERVAL_US = 100000;
-constexpr size_t VELOCITY_WINDOW_SAMPLES = 10;
+typedef struct {
+    const char* description;
+    uint8_t pinA;
+    uint8_t pinB;
+    int32_t pulsesPerRevolution;
+    int8_t directionSign;
+} AmtEncoderSettings;
 
-portMUX_TYPE encoderLock = portMUX_INITIALIZER_UNLOCKED;
-volatile int64_t encoderCount = 0;
-volatile uint32_t invalidTransitions = 0;
-volatile uint8_t previousAB = 0;
+typedef struct {
+    int64_t count;
+    double degrees;
+    uint32_t invalidTransitions;
+} AmtEncoderState;
 
-DRAM_ATTR const int8_t QUADRATURE_STEPS[16] = {
-     0, -1,  1,  0,
-     1,  0,  0, -1,
-    -1,  0,  0,  1,
-     0,  1, -1,  0
-};
+typedef struct {
+    AmtEncoderSettings settings;
+    portMUX_TYPE lock;
+    volatile int64_t count;
+    volatile uint32_t invalidTransitions;
+    volatile uint8_t previousAB;
+} AmtEncoder;
 
-uint8_t IRAM_ATTR readAB() {
+uint8_t IRAM_ATTR readAB(const AmtEncoder* encoder) {
+    const uint32_t bitMask = 1U;
+    const unsigned aStateBit = 1;
     uint32_t pins = GPIO.in;
-    return (((pins >> ENCODER_A_PIN) & 1U) << 1) |
-           ((pins >> ENCODER_B_PIN) & 1U);
+    return (((pins >> encoder->settings.pinA) & bitMask) << aStateBit) |
+           ((pins >> encoder->settings.pinB) & bitMask);
 }
 
-void IRAM_ATTR onEncoderChange() {
-    portENTER_CRITICAL_ISR(&encoderLock);
-    uint8_t currentAB = readAB();
-    if ((previousAB ^ currentAB) == 3) {
-        ++invalidTransitions;
+void IRAM_ATTR onEncoderChange(void* argument) {
+    static DRAM_ATTR const int8_t quadratureSteps[] = {
+         0, -1,  1,  0,
+         1,  0,  0, -1,
+        -1,  0,  0,  1,
+         0,  1, -1,  0
+    };
+    const unsigned bitsPerState = 2;
+    const uint8_t bothChannelsChanged = 0x03;
+    AmtEncoder* encoder = (AmtEncoder*)argument;
+
+    portENTER_CRITICAL_ISR(&encoder->lock);
+    uint8_t currentAB = readAB(encoder);
+    if ((encoder->previousAB ^ currentAB) == bothChannelsChanged) {
+        ++encoder->invalidTransitions;
     }
-    encoderCount += DIRECTION_SIGN * QUADRATURE_STEPS[(previousAB << 2) | currentAB];
-    previousAB = currentAB;
-    portEXIT_CRITICAL_ISR(&encoderLock);
+    unsigned transition = (encoder->previousAB << bitsPerState) | currentAB;
+    encoder->count += encoder->settings.directionSign * quadratureSteps[transition];
+    encoder->previousAB = currentAB;
+    portEXIT_CRITICAL_ISR(&encoder->lock);
 }
 
-int64_t countDeltas[VELOCITY_WINDOW_SAMPLES] = {};
-int64_t timeDeltas[VELOCITY_WINDOW_SAMPLES] = {};
-int64_t windowCountDelta = 0;
-int64_t windowTimeUs = 0;
-size_t windowSlot = 0;
-int64_t previousCount = 0;
-int64_t previousSampleUs = 0;
-int64_t startUs = 0;
-uint32_t displayRows = 0;
+void beginEncoder(AmtEncoder* encoder) {
+    pinMode(encoder->settings.pinA, INPUT);
+    pinMode(encoder->settings.pinB, INPUT);
+    encoder->previousAB = readAB(encoder);
+    attachInterruptArg(encoder->settings.pinA, onEncoderChange, encoder, CHANGE);
+    attachInterruptArg(encoder->settings.pinB, onEncoderChange, encoder, CHANGE);
+}
+
+AmtEncoderState getEncoderState(AmtEncoder* encoder) {
+    const int32_t quadratureCountsPerPulse = 4;
+    const double degreesPerRevolution = 360.0;
+
+    portENTER_CRITICAL(&encoder->lock);
+    int64_t count = encoder->count;
+    uint32_t invalidTransitions = encoder->invalidTransitions;
+    portEXIT_CRITICAL(&encoder->lock);
+
+    int64_t countsPerRevolution = (int64_t)encoder->settings.pulsesPerRevolution *
+                                 quadratureCountsPerPulse;
+    int64_t wrappedCount = (count % countsPerRevolution + countsPerRevolution) % countsPerRevolution;
+    double degrees = wrappedCount * degreesPerRevolution / countsPerRevolution;
+    AmtEncoderState state = {count, degrees, invalidTransitions};
+    return state;
+}
+
+typedef struct {
+    uint32_t serialBaud;
+    uint32_t startupDelayMs;
+    int64_t refreshIntervalUs;
+    uint32_t idleDelayMs;
+    uint32_t rowsPerHeader;
+} DisplaySettings;
+
+typedef struct {
+    AmtEncoder left;
+    AmtEncoder right;
+    DisplaySettings display;
+    int64_t startUs;
+    int64_t previousDisplayUs;
+    uint32_t displayedRows;
+} Application;
+
+Application* getApplication(void) {
+    static Application instance = {
+        {
+            {"Left", 5, 4, 2048, 1},
+            portMUX_INITIALIZER_UNLOCKED,
+            0, 0, 0
+        },
+        {
+            {"Right", 7, 6, 2048, 1},
+            portMUX_INITIALIZER_UNLOCKED,
+            0, 0, 0
+        },
+        {115200, 1000, 100000, 1, 30},
+        0, 0, 0
+    };
+    return &instance;
+}
 
 void setup() {
-    Serial.begin(115200);
-    delay(1000);
-
-    pinMode(ENCODER_A_PIN, INPUT);
-    pinMode(ENCODER_B_PIN, INPUT);
-    pinMode(ENCODER_INDEX_PIN, INPUT_PULLUP);
-
-    previousAB = readAB();
-    attachInterrupt(digitalPinToInterrupt(ENCODER_A_PIN), onEncoderChange, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_B_PIN), onEncoderChange, CHANGE);
-
-    startUs = esp_timer_get_time();
-    previousSampleUs = startUs;
-    Serial.printf("Encoder: %ld PPR | %ld counts/rev | zero = startup position\n",
-                  static_cast<long>(ENCODER_PPR), static_cast<long>(COUNTS_PER_REVOLUTION));
-    Serial.println("A/B/X are GPIO snapshots. Velocity is signed, averaged over up to 1 second.");
+    Application* app = getApplication();
+    Serial.begin(app->display.serialBaud);
+    delay(app->display.startupDelayMs);
+    beginEncoder(&app->left);
+    beginEncoder(&app->right);
+    app->startUs = esp_timer_get_time();
+    app->previousDisplayUs = app->startUs;
 }
 
 void loop() {
+    const int64_t microsecondsPerMillisecond = 1000;
+    const uint64_t millisecondsPerSecond = 1000;
+    Application* app = getApplication();
     int64_t nowUs = esp_timer_get_time();
-    if (nowUs - previousSampleUs < DISPLAY_INTERVAL_US) {
-        delay(1);
+    if (nowUs - app->previousDisplayUs < app->display.refreshIntervalUs) {
+        delay(app->display.idleDelayMs);
         return;
     }
+    app->previousDisplayUs = nowUs;
 
-    portENTER_CRITICAL(&encoderLock);
-    int64_t count = encoderCount;
-    uint32_t errors = invalidTransitions;
-    uint8_t ab = readAB();
-    portEXIT_CRITICAL(&encoderLock);
+    AmtEncoderState left = getEncoderState(&app->left);
+    AmtEncoderState right = getEncoderState(&app->right);
+    uint64_t elapsedMs = (nowUs - app->startUs) / microsecondsPerMillisecond;
 
-    windowCountDelta -= countDeltas[windowSlot];
-    windowTimeUs -= timeDeltas[windowSlot];
-    countDeltas[windowSlot] = count - previousCount;
-    timeDeltas[windowSlot] = nowUs - previousSampleUs;
-    windowCountDelta += countDeltas[windowSlot];
-    windowTimeUs += timeDeltas[windowSlot];
-    windowSlot = (windowSlot + 1) % VELOCITY_WINDOW_SAMPLES;
-    previousCount = count;
-    previousSampleUs = nowUs;
-
-    double velocity = static_cast<double>(windowCountDelta) * 1000000.0 /
-                      (COUNTS_PER_REVOLUTION * static_cast<double>(windowTimeUs));
-    int32_t wrappedCount = (count % COUNTS_PER_REVOLUTION + COUNTS_PER_REVOLUTION) %
-                           COUNTS_PER_REVOLUTION;
-    double angle = wrappedCount * 360.0 / COUNTS_PER_REVOLUTION;
-    uint64_t elapsedMs = (nowUs - startUs) / 1000;
-    char indexLevel = INDEX_CONNECTED ? ('0' + digitalRead(ENCODER_INDEX_PIN)) : '-';
-
-    if (displayRows++ % 30 == 0) {
-        Serial.println("   Time (s) | A B X |      Count | Angle (deg) | Avg (rev/s) | Invalid");
+    if (app->displayedRows++ % app->display.rowsPerHeader == 0) {
+        Serial.printf("   Time (s) | %10s (deg) | %10s (deg)\n",
+                      app->left.settings.description, app->right.settings.description);
     }
-    Serial.printf("%8llu.%03u | %u %u %c | %10lld | %11.2f | %+11.4f | %lu\n",
-                  static_cast<unsigned long long>(elapsedMs / 1000),
-                  static_cast<unsigned>(elapsedMs % 1000),
-                  static_cast<unsigned>(ab >> 1), static_cast<unsigned>(ab & 1), indexLevel,
-                  static_cast<long long>(count), angle, velocity, static_cast<unsigned long>(errors));
+    Serial.printf("%8llu.%03u | %16.2f | %16.2f\n",
+                  (unsigned long long)(elapsedMs / millisecondsPerSecond),
+                  (unsigned)(elapsedMs % millisecondsPerSecond),
+                  left.degrees, right.degrees);
 }
