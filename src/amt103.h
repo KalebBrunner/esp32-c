@@ -1,11 +1,8 @@
 #pragma once
 
-#include <stdint.h>
-
-enum { AMT103_CAPACITY = 2 };
+#include <Arduino.h>
 
 typedef struct {
-    const char* description;
     uint8_t pinA;
     uint8_t pinB;
     int32_t pulsesPerRevolution;
@@ -18,10 +15,16 @@ typedef struct {
     int64_t timestampUs;
     uint32_t invalidTransitions;
     bool valid;
-} AMT103State;
+} AMT103Sample;
 
-typedef struct AMT103Internal* AMT103Handle;
+typedef struct {
+    AMT103Config config;
+    portMUX_TYPE lock;
+    volatile int64_t count;
+    volatile uint32_t invalidTransitions;
+    volatile uint8_t previousAB;
+    AMT103Sample latestSample;
+} AMT103;
 
-bool createAmtEncoder(AMT103Handle* handle, const AMT103Config* config);
-void updateEncoder(AMT103Handle encoder);
-AMT103State getEncoderState(AMT103Handle encoder);
+void amt103Start(AMT103* encoder);
+void amt103CaptureSnapshot(AMT103* encoder);

@@ -1,9 +1,10 @@
 [
   {
     "label": "ESP32: Build",
-    "command": "pio",
+    "command": "bash",
     "args": [
-      "run"
+      "esp32.sh",
+      "build"
     ],
     "cwd": "$ZED_WORKTREE_ROOT",
     "save": "all"
@@ -49,10 +50,9 @@
   },
   {
     "label": "ESP32: Generate compile commands",
-    "command": "pio",
+    "command": "bash",
     "args": [
-      "run",
-      "--target",
+      "esp32.sh",
       "compiledb"
     ],
     "cwd": "$ZED_WORKTREE_ROOT",

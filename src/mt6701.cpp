@@ -2,16 +2,7 @@
 #include <esp_timer.h>
 #include <math.h>
 
-struct MT6701Internal {
-    bool allocated;
-    MT6701Config config;
-    MT6701State snapshot;
-    int64_t lastAttemptUs;
-};
-
-static struct MT6701Internal magneticEncoder = {};
-
-static bool readRegister(MT6701Handle encoder, uint8_t address, uint8_t* value) {
+static bool readRegister(MT6701* encoder, uint8_t address, uint8_t* value) {
     TwoWire* bus = encoder->config.bus;
     bus->beginTransmission(encoder->config.address);
     bus->write(address);
@@ -26,22 +17,12 @@ static bool readRegister(MT6701Handle encoder, uint8_t address, uint8_t* value) 
     return true;
 }
 
-bool createMt6701Encoder(MT6701Handle* handle, const MT6701Config* config) {
-    if (handle == NULL || *handle != NULL || config == NULL || config->bus == NULL ||
-        magneticEncoder.allocated || (config->address != 0x06 && config->address != 0x46) ||
-        (config->directionSign != 1 && config->directionSign != -1) ||
-        !isfinite(config->zeroOffsetDegrees) || config->sampleIntervalUs <= 0) {
-        return false;
-    }
-    magneticEncoder.config = *config;
-    magneticEncoder.snapshot.angle.reference = ANGLE_SENSOR_ABSOLUTE;
-    magneticEncoder.allocated = true;
-    magneticEncoder.lastAttemptUs = esp_timer_get_time() - config->sampleIntervalUs;
-    *handle = &magneticEncoder;
-    return true;
+void startMt6701(MT6701* encoder) {
+    encoder->snapshot.angle.reference = ANGLE_SENSOR_ABSOLUTE;
+    encoder->lastAttemptUs = esp_timer_get_time() - encoder->config.sampleIntervalUs;
 }
 
-bool updateMt6701Encoder(MT6701Handle encoder) {
+bool updateMt6701(MT6701* encoder) {
     const uint8_t angleHighRegister = 0x03;
     const uint8_t angleLowRegister = 0x04;
     const unsigned highAngleShift = 6;
@@ -81,7 +62,7 @@ bool updateMt6701Encoder(MT6701Handle encoder) {
     return true;
 }
 
-MT6701State getMt6701State(MT6701Handle encoder) {
+MT6701State getMt6701State(const MT6701* encoder) {
     MT6701State unavailable = {};
     return encoder != NULL ? encoder->snapshot : unavailable;
 }

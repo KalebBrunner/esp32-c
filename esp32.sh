@@ -36,7 +36,9 @@ if ! command -v pio >/dev/null 2>&1; then
 fi
 
 case "$action" in
-    build) exec pio run ;;
+    build)
+        pio run
+        exec pio run --target compiledb ;;
     upload)
         printf 'Stop other serial monitors before uploading.\n'
         printf 'If it remains in download mode afterward, release BOOT and press RESET.\n'

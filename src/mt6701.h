@@ -4,7 +4,6 @@
 #include "angle_reading.h"
 
 typedef struct {
-    const char* description;
     TwoWire* bus;
     uint8_t address;
     int8_t directionSign;
@@ -18,8 +17,12 @@ typedef struct {
     uint32_t failedReads;
 } MT6701State;
 
-typedef struct MT6701Internal* MT6701Handle;
+typedef struct {
+    MT6701Config config;
+    MT6701State snapshot;
+    int64_t lastAttemptUs;
+} MT6701;
 
-bool createMt6701Encoder(MT6701Handle* handle, const MT6701Config* config);
-bool updateMt6701Encoder(MT6701Handle encoder);
-MT6701State getMt6701State(MT6701Handle encoder);
+void startMt6701(MT6701* encoder);
+bool updateMt6701(MT6701* encoder);
+MT6701State getMt6701State(const MT6701* encoder);
