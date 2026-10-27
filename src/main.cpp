@@ -1,6 +1,24 @@
 #include <Arduino.h>
 #include <esp_timer.h>
-#include "sensors.h"
+#include "amt103.h"
+#include "mt6701.h"
+#include "board_pins.h"
+#include <math.h>
+
+enum AngleId {
+    Angle_Turret,
+    Angle_Shoulder,
+    Angle_LittleNolan,
+    Angle_BigNolan,
+    Angle_Count
+};
+
+typedef struct {
+    MT6701 turret;
+    MT6701 shoulder;
+    MT6701 littleNolan;
+    AMT103 bigNolan;
+} Sensors;
 
 typedef struct {
     Sensors sensors;
@@ -12,6 +30,42 @@ typedef struct {
     uint32_t displayedRows;
 } Application;
 
+
+void initSensors(Application* app){
+    app->sensors.bigNolan.config = {
+        .pinA = Pin_BigNolan_ChannelA,
+        .pinB = Pin_BigNolan_ChannelB,
+        .pulsesPerRevolution = 2048,
+        .directionSign = 1
+    };
+    amt103Start(&app->sensors.bigNolan);
+
+    const uint32_t busFrequencyHz = 100000;
+    const uint16_t busTimeoutMs = 5;
+    Wire.begin(Pin_SDA, Pin_SCL, busFrequencyHz);
+    Wire.setTimeOut(busTimeoutMs);
+
+    app->sensors.turret.config = {
+        .bus = &Wire,
+        .address = 0x06,
+        .directionSign = 1,
+        .zeroOffsetDegrees = 0.0
+    };
+    app->sensors.shoulder.config = {
+        .bus = NULL,
+        .address = 0x06,
+        .directionSign = 1,
+        .zeroOffsetDegrees = 0.0
+    };
+    app->sensors.littleNolan.config = {
+        .bus = NULL,
+        .address = 0x06,
+        .directionSign = 1,
+        .zeroOffsetDegrees = 0.0
+    };
+}
+
+
 Application applicationState = {};
 
 void setup() {
@@ -22,53 +76,62 @@ void setup() {
     app->screenRefreshUs = 100000;
     app->rowsPerHeader = 30;
     app->idleDelayMs = 1;
+
+    initSensors(app);
+
     app->startUs = esp_timer_get_time();
     app->nextScreenRefreshUs = app->startUs + app->screenRefreshUs;
-
-    startSensors(&app->sensors);
 }
 
+void updateAngles(Sensors* sensors, double angles[Angle_Count]) {
+    angles[Angle_Turret] = captureMt6701Angle(&sensors->turret);
+    angles[Angle_Shoulder] = captureMt6701Angle(&sensors->shoulder);
+    angles[Angle_LittleNolan] = captureMt6701Angle(&sensors->littleNolan);
 
-static void formatAngle(char* text, size_t capacity, AngleReading reading) {
-    if (reading.valid) {
-        snprintf(text, capacity, "%.2f", reading.degrees);
+    angles[Angle_BigNolan] = captureAmt103Angle(&sensors->bigNolan);
+}
+
+static void formatAngle(char* text, size_t capacity, double angle) {
+    if (isfinite(angle)) {
+        snprintf(text, capacity, "%.2f", angle);
     } else {
-        snprintf(text, capacity, "ERR");
+        snprintf(text, capacity, "--");
     }
 }
 
-void printScreen(Sensors* sensors, int64_t elapsedUs, bool showHeader) {
+void printScreen(const double angles[Angle_Count], int64_t elapsedUs, bool showHeader) {
     const int64_t microsecondsPerMillisecond = 1000;
     const uint64_t millisecondsPerSecond = 1000;
     const size_t angleTextCapacity = 16;
-    char leftText[angleTextCapacity];
-    char rightText[angleTextCapacity];
-    char magneticText[angleTextCapacity];
-    formatAngle(leftText, sizeof(leftText), getSensorReading(sensors, Sensor_LeftAngle));
-    formatAngle(rightText, sizeof(rightText), getSensorReading(sensors, Sensor_RightAngle));
-    formatAngle(magneticText, sizeof(magneticText), getSensorReading(sensors, Sensor_MagneticAngle));
+    char angleText[Angle_Count][angleTextCapacity];
+    for (size_t i = 0; i < Angle_Count; ++i) {
+        formatAngle(angleText[i], sizeof(angleText[i]), angles[i]);
+    }
     uint64_t elapsedMs = elapsedUs / microsecondsPerMillisecond;
 
     if (showHeader) {
-        Serial.println("   Time (s) |     Left angle |    Right angle | Magnetic angle");
-        Serial.println("            |      (deg)     |      (deg)     |      (deg)");
+        Serial.println("   Time (s) | Turret (deg) | Shoulder (deg) | Little Nolan (deg) | Big Nolan (deg)");
     }
-    Serial.printf("%8llu.%03u | %14s | %14s | %14s\n",
+    Serial.printf("%8llu.%03u | %12s | %14s | %18s | %15s\n",
                   (unsigned long long)(elapsedMs / millisecondsPerSecond),
                   (unsigned)(elapsedMs % millisecondsPerSecond),
-                  leftText, rightText, magneticText);
+                  angleText[Angle_Turret], angleText[Angle_Shoulder],
+                  angleText[Angle_LittleNolan], angleText[Angle_BigNolan]);
 }
 
 void loop() {
     Application* app = &applicationState;
-
     int64_t currentTimeUs = esp_timer_get_time();
     if (currentTimeUs < app->nextScreenRefreshUs) {
         delay(app->idleDelayMs);
         return;
     }
 
+    double angles[Angle_Count] = {};
+    updateAngles(&app->sensors, angles);
+
+    currentTimeUs = esp_timer_get_time();
     bool showHeader = app->displayedRows++ % app->rowsPerHeader == 0;
-    printScreen(&app->sensors, currentTimeUs - app->startUs, showHeader);
+    printScreen(angles, currentTimeUs - app->startUs, showHeader);
     app->nextScreenRefreshUs = currentTimeUs + app->screenRefreshUs;
 }

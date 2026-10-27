@@ -1,6 +1,7 @@
 #include "amt103.h"
 #include <Arduino.h>
 #include <esp_timer.h>
+#include <math.h>
 #include <soc/gpio_struct.h>
 
 const int QUADRATURE_COUNTS_PER_PULSE = 4;
@@ -64,4 +65,9 @@ AMT103Sample amt103CaptureSnapshot(AMT103* encoder) {
     newSample.degrees = wrappedCount * degreesPerRevolution / countsPerRevolution;
     newSample.valid = true;
     return newSample;
+    }
+
+double captureAmt103Angle(AMT103* encoder) {
+    AMT103Sample sample = amt103CaptureSnapshot(encoder);
+    return sample.valid ? sample.degrees : NAN;
 }

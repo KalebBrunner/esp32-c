@@ -21,3 +21,4 @@ typedef struct {
 } MT6701;
 
 MT6701Sample mt6701CaptureSnapshot(const MT6701* encoder);
+double captureMt6701Angle(const MT6701* encoder);

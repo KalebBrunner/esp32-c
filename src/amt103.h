@@ -27,3 +27,4 @@ typedef struct {
 
 void amt103Start(AMT103* encoder);
 AMT103Sample amt103CaptureSnapshot(AMT103* encoder);
+double captureAmt103Angle(AMT103* encoder);

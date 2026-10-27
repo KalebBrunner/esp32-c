@@ -50,3 +50,11 @@ MT6701Sample mt6701CaptureSnapshot(const MT6701* encoder) {
     newSample.valid = true;
     return newSample;
 }
+
+double captureMt6701Angle(const MT6701* encoder) {
+    if (encoder == NULL || encoder->config.bus == NULL) {
+        return NAN;
+    }
+    MT6701Sample sample = mt6701CaptureSnapshot(encoder);
+    return sample.valid ? sample.degrees : NAN;
+}
