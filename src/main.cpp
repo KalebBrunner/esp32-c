@@ -2,6 +2,7 @@
 #include <esp_timer.h>
 #include "amt103.h"
 #include "mt6701.h"
+#include "tca9548a.h"
 #include "board_pins.h"
 #include <math.h>
 
@@ -49,9 +50,7 @@ void initSensors(Application* app){
 
     const uint8_t multiplexerAddress = 0x70;
     const uint8_t turretChannel = 0;
-    Wire.beginTransmission(multiplexerAddress);
-    Wire.write((uint8_t)(1U << turretChannel));
-    Wire.endTransmission();
+    tca9548aSelectChannel(&Wire, multiplexerAddress, turretChannel);
 
     app->sensors.turret.config = {
         .bus = &Wire,
