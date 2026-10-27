@@ -2,6 +2,7 @@
 
 #include "amt103.h"
 #include "mt6701.h"
+#include "angle_reading.h"
 
 enum SensorId {
     Sensor_LeftAngle,
@@ -16,5 +17,4 @@ typedef struct {
 } Sensors;
 
 void startSensors(Sensors* sensors);
-void updateSensors(Sensors* sensors);
-AngleReading getSensorReading(const Sensors* sensors, enum SensorId id);
+AngleReading getSensorReading(Sensors* sensors, enum SensorId id);

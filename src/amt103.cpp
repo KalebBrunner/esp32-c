@@ -45,12 +45,12 @@ void amt103Start(AMT103* encoder) {
     attachInterruptArg(encoder->config.pinB, amt103OnPinChange, encoder, CHANGE);
 }
 
-void amt103CaptureSnapshot(AMT103* encoder) {
+AMT103Sample amt103CaptureSnapshot(AMT103* encoder) {
     const double degreesPerRevolution = 360.0;
-    if (encoder == NULL) {
-        return;
-    }
     AMT103Sample newSample = {};
+    if (encoder == NULL) {
+        return newSample;
+    }
     portENTER_CRITICAL(&encoder->lock);
     newSample.count = encoder->count;
     newSample.invalidTransitions = encoder->invalidTransitions;
@@ -63,5 +63,5 @@ void amt103CaptureSnapshot(AMT103* encoder) {
                            countsPerRevolution;
     newSample.degrees = wrappedCount * degreesPerRevolution / countsPerRevolution;
     newSample.valid = true;
-    encoder->latestSample = newSample;
+    return newSample;
 }

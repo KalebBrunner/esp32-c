@@ -26,29 +26,29 @@ void startSensors(Sensors* sensors) {
         .bus = &Wire,
         .address = 0x06,
         .directionSign = 1,
-        .zeroOffsetDegrees = 0.0,
-        .sampleIntervalUs = 10000
+        .zeroOffsetDegrees = 0.0
     };
-    startMt6701(&sensors->magnetic);
 }
 
-void updateSensors(Sensors* sensors) {
-    amt103CaptureSnapshot(&sensors->left);
-    amt103CaptureSnapshot(&sensors->right);
-    updateMt6701(&sensors->magnetic);
-}
-
-AngleReading getSensorReading(const Sensors* sensors, enum SensorId id) {
+AngleReading getSensorReading(Sensors* sensors, enum SensorId id) {
     AMT103Sample sample = {};
     switch (id) {
         case Sensor_LeftAngle:
-            sample = sensors->left.latestSample;
+            sample = amt103CaptureSnapshot(&sensors->left);
             break;
         case Sensor_RightAngle:
-            sample = sensors->right.latestSample;
+            sample = amt103CaptureSnapshot(&sensors->right);
             break;
-        case Sensor_MagneticAngle:
-            return getMt6701State(&sensors->magnetic).angle;
+        case Sensor_MagneticAngle: {
+            MT6701Sample magneticSample = mt6701CaptureSnapshot(&sensors->magnetic);
+            AngleReading reading = {
+                .degrees = magneticSample.degrees,
+                .timestampUs = magneticSample.timestampUs,
+                .valid = magneticSample.valid,
+                .reference = ANGLE_SENSOR_ABSOLUTE
+            };
+            return reading;
+        }
         default: {
             AngleReading unavailable = {};
             return unavailable;

@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <esp_timer.h>
 #include "sensors.h"
-#include "display.h"
 
 typedef struct {
     Sensors sensors;
@@ -38,7 +37,7 @@ static void formatAngle(char* text, size_t capacity, AngleReading reading) {
     }
 }
 
-void printScreen(const Sensors* sensors, int64_t elapsedUs, bool showHeader) {
+void printScreen(Sensors* sensors, int64_t elapsedUs, bool showHeader) {
     const int64_t microsecondsPerMillisecond = 1000;
     const uint64_t millisecondsPerSecond = 1000;
     const size_t angleTextCapacity = 16;
@@ -62,7 +61,6 @@ void printScreen(const Sensors* sensors, int64_t elapsedUs, bool showHeader) {
 
 void loop() {
     Application* app = &applicationState;
-    updateSensors(&app->sensors);
 
     int64_t currentTimeUs = esp_timer_get_time();
     if (currentTimeUs < app->nextScreenRefreshUs) {

@@ -23,8 +23,7 @@ typedef struct {
     volatile int64_t count;
     volatile uint32_t invalidTransitions;
     volatile uint8_t previousAB;
-    AMT103Sample latestSample;
 } AMT103;
 
 void amt103Start(AMT103* encoder);
-void amt103CaptureSnapshot(AMT103* encoder);
+AMT103Sample amt103CaptureSnapshot(AMT103* encoder);
