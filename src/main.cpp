@@ -32,6 +32,7 @@ typedef struct {
 
 
 void initSensors(Application* app){
+    /*
     app->sensors.bigNolan.config = {
         .pinA = Pin_BigNolan_ChannelA,
         .pinB = Pin_BigNolan_ChannelB,
@@ -39,11 +40,18 @@ void initSensors(Application* app){
         .directionSign = 1
     };
     amt103Start(&app->sensors.bigNolan);
+    */
 
     const uint32_t busFrequencyHz = 100000;
     const uint16_t busTimeoutMs = 5;
     Wire.begin(Pin_SDA, Pin_SCL, busFrequencyHz);
     Wire.setTimeOut(busTimeoutMs);
+
+    const uint8_t multiplexerAddress = 0x70;
+    const uint8_t turretChannel = 0;
+    Wire.beginTransmission(multiplexerAddress);
+    Wire.write((uint8_t)(1U << turretChannel));
+    Wire.endTransmission();
 
     app->sensors.turret.config = {
         .bus = &Wire,
@@ -85,10 +93,10 @@ void setup() {
 
 void updateAngles(Sensors* sensors, double angles[Angle_Count]) {
     angles[Angle_Turret] = captureMt6701Angle(&sensors->turret);
-    angles[Angle_Shoulder] = captureMt6701Angle(&sensors->shoulder);
-    angles[Angle_LittleNolan] = captureMt6701Angle(&sensors->littleNolan);
+    // angles[Angle_Shoulder] = captureMt6701Angle(&sensors->shoulder);
+    // angles[Angle_LittleNolan] = captureMt6701Angle(&sensors->littleNolan);
 
-    angles[Angle_BigNolan] = captureAmt103Angle(&sensors->bigNolan);
+    // angles[Angle_BigNolan] = captureAmt103Angle(&sensors->bigNolan);
 }
 
 static void formatAngle(char* text, size_t capacity, double angle) {
@@ -104,19 +112,27 @@ void printScreen(const double angles[Angle_Count], int64_t elapsedUs, bool showH
     const uint64_t millisecondsPerSecond = 1000;
     const size_t angleTextCapacity = 16;
     char angleText[Angle_Count][angleTextCapacity];
-    for (size_t i = 0; i < Angle_Count; ++i) {
-        formatAngle(angleText[i], sizeof(angleText[i]), angles[i]);
-    }
+    formatAngle(angleText[Angle_Turret], sizeof(angleText[Angle_Turret]), angles[Angle_Turret]);
+    // formatAngle(angleText[Angle_Shoulder], sizeof(angleText[Angle_Shoulder]), angles[Angle_Shoulder]);
+    // formatAngle(angleText[Angle_LittleNolan], sizeof(angleText[Angle_LittleNolan]), angles[Angle_LittleNolan]);
+    // formatAngle(angleText[Angle_BigNolan], sizeof(angleText[Angle_BigNolan]), angles[Angle_BigNolan]);
     uint64_t elapsedMs = elapsedUs / microsecondsPerMillisecond;
 
     if (showHeader) {
-        Serial.println("   Time (s) | Turret (deg) | Shoulder (deg) | Little Nolan (deg) | Big Nolan (deg)");
+        Serial.println("   Time (s) | Turret (deg)");
+        // Serial.println("   Time (s) | Turret (deg) | Shoulder (deg) | Little Nolan (deg) | Big Nolan (deg)");
     }
+    Serial.printf("%8llu.%03u | %12s\n",
+                  (unsigned long long)(elapsedMs / millisecondsPerSecond),
+                  (unsigned)(elapsedMs % millisecondsPerSecond),
+                  angleText[Angle_Turret]);
+    /*
     Serial.printf("%8llu.%03u | %12s | %14s | %18s | %15s\n",
                   (unsigned long long)(elapsedMs / millisecondsPerSecond),
                   (unsigned)(elapsedMs % millisecondsPerSecond),
                   angleText[Angle_Turret], angleText[Angle_Shoulder],
                   angleText[Angle_LittleNolan], angleText[Angle_BigNolan]);
+    */
 }
 
 void loop() {
