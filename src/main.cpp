@@ -1,261 +1,325 @@
 #include <Arduino.h>
 #include <esp_timer.h>
-#include <soc/gpio_struct.h>
+#include "amt103.h"
+#include "mt6701.h"
+
+// ************************************************
+// ************* Globals  *************************
+// ************************************************
+
+// ESP32-S3 GPIO numbers, not physical header positions.
+// Avoid GPIO0/3/45/46 for general wiring: boot strapping pins.
+// Keep GPIO19/20 free for our native USB connection.
+// Avoid GPIO26-32 (flash/PSRAM); GPIO33-37 may also be reserved on octal-memory modules.
+// GPIO43/44 are UART0; GPIO39-42 are external JTAG pins. Reserve them if using those interfaces.
+// Check the exact board schematic for LEDs and other onboard connections before adding pins.
+enum Pin {
+    Pin_BootStrap0 = 0,
+    Pin_Unused1 = 1,
+    Pin_Unused2 = 2,
+    Pin_BootStrap3 = 3,
+    Pin_LeftEncoder_ChannelB = 4,
+    Pin_LeftEncoder_ChannelA = 5,
+    Pin_RightEncoder_ChannelB = 6,
+    Pin_RightEncoder_ChannelA = 7,
+    Pin_Unused8 = 8,
+    Pin_Unused9 = 9,
+    Pin_Unused10 = 10,
+    Pin_Unused11 = 11,
+    Pin_Unused12 = 12,
+    Pin_Unused13 = 13,
+    Pin_Unused14 = 14,
+    Pin_Magnetic_SDA = 15,
+    Pin_Magnetic_SCL = 16,
+    Pin_Unused17 = 17,
+    Pin_Unused18 = 18,
+    Pin_USB_DMinus = 19,
+    Pin_USB_DPlus = 20,
+    Pin_Unused21 = 21,
+    // GPIO22-25 do not exist on ESP32-S3.
+    Pin_Memory26 = 26,
+    Pin_Memory27 = 27,
+    Pin_Memory28 = 28,
+    Pin_Memory29 = 29,
+    Pin_Memory30 = 30,
+    Pin_Memory31 = 31,
+    Pin_Memory32 = 32,
+    Pin_ModuleDependent33 = 33,
+    Pin_ModuleDependent34 = 34,
+    Pin_ModuleDependent35 = 35,
+    Pin_ModuleDependent36 = 36,
+    Pin_ModuleDependent37 = 37,
+    Pin_BoardDependent38 = 38,
+    Pin_JTAG_MTCK = 39,
+    Pin_JTAG_MTDO = 40,
+    Pin_JTAG_MTDI = 41,
+    Pin_JTAG_MTMS = 42,
+    Pin_UART0_TX = 43,
+    Pin_UART0_RX = 44,
+    Pin_BootStrap45 = 45,
+    Pin_BootStrap46 = 46,
+    Pin_Unused47 = 47,
+    Pin_BoardDependent48 = 48
+};
+
+// GPIO33/34 may not be exposed; GPIO35-37 depend on module memory wiring.
+// GPIO38/48 may drive the onboard RGB LED, depending on board revision.
+// Unused means unassigned by this firmware, not guaranteed free on every board.
+
+// ************************************************
+// ************* Sensor Structs  ******************
+// ************************************************
+
+enum SensorId {
+    Sensor_LeftAngle,
+    Sensor_RightAngle,
+    Sensor_MagneticAngle,
+    Sensor_Count
+};
+
+enum SensorType {
+    SensorType_Unconfigured,
+    SensorType_AMT103,
+    SensorType_MT6701
+};
+
+typedef struct {
+    const char* name;
+    enum SensorType type;
+    size_t driverIndex;
+} Sensor;
 
 enum {
-    AMT103_CAPACITY = 2,
     LEFT_ENCODER = 0,
     RIGHT_ENCODER = 1,
-    QUADRATURE_COUNTS_PER_PULSE = 4,
-    BITS_PER_AB_STATE = 2,
-    BOTH_CHANNELS_CHANGED = 3
+    MAGNETIC_ENCODER = 0,
+    MAGNETIC_SENSOR_CAPACITY = 1
 };
 
 typedef struct {
-    const char* description;
-    uint8_t pinA;
-    uint8_t pinB;
-    int32_t pulsesPerRevolution;
-    int8_t directionSign;
-} AMT103Config;
-
-typedef struct {
-    int64_t count;
-    double degrees;
-    int64_t timestampUs;
-    uint32_t invalidTransitions;
-    bool valid;
-} AMT103State;
-
-typedef struct AMT103Internal* AMT103Handle;
-
-struct AMT103Internal {
-    bool allocated;
-    AMT103Config config;
-    portMUX_TYPE lock;
-    volatile int64_t count;
-    volatile uint32_t invalidTransitions;
-    volatile uint8_t previousAB;
-    AMT103State snapshot;
-};
-
-typedef struct {
-    AMT103Handle encoders[AMT103_CAPACITY];
-    size_t count;
+    Sensor items[Sensor_Count];
+    AMT103Handle amtEncoders[AMT103_CAPACITY];
+    size_t amtCount;
+    MT6701Handle magneticEncoders[MAGNETIC_SENSOR_CAPACITY];
+    size_t magneticCount;
 } Sensors;
 
-typedef struct {
-    int64_t refreshIntervalUs;
-    uint32_t rowsPerHeader;
-} DisplaySettings;
+AngleReading getSensorReading(const Sensors* sensors, enum SensorId id) {
+    AngleReading unavailable = {};
+    if (sensors == NULL || id < 0 || id >= Sensor_Count) {
+        return unavailable;
+    }
+    const Sensor* sensor = &sensors->items[id];
+    switch (sensor->type) {
+        case SensorType_AMT103: {
+            if (sensor->driverIndex >= sensors->amtCount) {
+                return unavailable;
+            }
+            AMT103State state = getEncoderState(sensors->amtEncoders[sensor->driverIndex]);
+            AngleReading reading = {
+                .degrees = state.degrees,
+                .timestampUs = state.timestampUs,
+                .valid = state.valid,
+                .reference = ANGLE_STARTUP_RELATIVE
+            };
+            return reading;
+        }
+        case SensorType_MT6701:
+            if (sensor->driverIndex >= sensors->magneticCount) {
+                return unavailable;
+            }
+            return getMt6701State(sensors->magneticEncoders[sensor->driverIndex]).angle;
+        default:
+            return unavailable;
+    }
+}
 
-typedef struct {
-    DisplaySettings display;
-    uint32_t idleDelayMs;
-} AppConfig;
+void updateAmtSensors(Sensors* sensors) {
+    for (size_t i = 0; i < sensors->amtCount; ++i) {
+        updateEncoder(sensors->amtEncoders[i]);
+    }
+}
+
+void updateMagneticSensors(Sensors* sensors) {
+    for (size_t i = 0; i < sensors->magneticCount; ++i) {
+        updateMt6701Encoder(sensors->magneticEncoders[i]);
+    }
+}
+
+void updateSensors(Sensors* sensors) {
+    updateAmtSensors(sensors);
+    updateMagneticSensors(sensors);
+}
+
+// ************************************************
+// ************* App Structs  **********************
+// ************************************************
+
 
 typedef struct {
     Sensors sensors;
-    AppConfig config;
+    int64_t screenRefreshUs;
+    uint32_t rowsPerHeader;
+    uint32_t idleDelayMs;
     int64_t startUs;
-    int64_t currentTimeUs;
     int64_t nextScreenRefreshUs;
     uint32_t displayedRows;
     bool ready;
 } Application;
 
-static uint8_t IRAM_ATTR readAB(AMT103Handle encoder) {
-    const uint32_t bitMask = 1U;
-    const unsigned aStateBit = 1;
-    uint32_t pins = GPIO.in;
-    return (((pins >> encoder->config.pinA) & bitMask) << aStateBit) |
-           ((pins >> encoder->config.pinB) & bitMask);
-}
+// ************************************************
+// ************* Persistent State *****************
+// ************************************************
 
-static void IRAM_ATTR onEncoderChange(void* argument) {
-    static DRAM_ATTR const int8_t quadratureSteps[] = {
-         0, -1,  1,  0,
-         1,  0,  0, -1,
-        -1,  0,  0,  1,
-         0,  1, -1,  0
-    };
-    AMT103Handle encoder = (AMT103Handle)argument;
+Application applicationState = {};
 
-    portENTER_CRITICAL_ISR(&encoder->lock);
-    uint8_t currentAB = readAB(encoder);
-    if ((encoder->previousAB ^ currentAB) == BOTH_CHANNELS_CHANGED) {
-        ++encoder->invalidTransitions;
-    }
-    unsigned transition = (encoder->previousAB << BITS_PER_AB_STATE) | currentAB;
-    encoder->count += encoder->config.directionSign * quadratureSteps[transition];
-    encoder->previousAB = currentAB;
-    portEXIT_CRITICAL_ISR(&encoder->lock);
-}
-
-bool createAmtEncoder(AMT103Handle* handle, const AMT103Config* config) {
-    static struct AMT103Internal pool[AMT103_CAPACITY] = {};
-    const uint8_t highestSupportedPin = 21;
-    if (handle == NULL || config == NULL || *handle != NULL ||
-        config->pinA > highestSupportedPin || config->pinB > highestSupportedPin ||
-        config->pinA == config->pinB || config->pulsesPerRevolution <= 0 ||
-        (config->directionSign != 1 && config->directionSign != -1)) {
-        return false;
-    }
-
-    AMT103Handle available = NULL;
-    for (size_t i = 0; i < AMT103_CAPACITY; ++i) {
-        if (!pool[i].allocated) {
-            if (available == NULL) {
-                available = &pool[i];
-            }
-            continue;
-        }
-        const AMT103Config* existing = &pool[i].config;
-        if (config->pinA == existing->pinA || config->pinA == existing->pinB ||
-            config->pinB == existing->pinA || config->pinB == existing->pinB) {
-            return false;
-        }
-    }
-    if (available == NULL) {
-        return false;
-    }
-
-    available->config = *config;
-    portMUX_INITIALIZE(&available->lock);
-    pinMode(config->pinA, INPUT);
-    pinMode(config->pinB, INPUT);
-    available->previousAB = readAB(available);
-    available->allocated = true;
-    attachInterruptArg(config->pinA, onEncoderChange, available, CHANGE);
-    attachInterruptArg(config->pinB, onEncoderChange, available, CHANGE);
-    *handle = available;
-    return true;
-}
-
-void updateSensors(Sensors* sensors) {
-    const double degreesPerRevolution = 360.0;
-    for (size_t i = 0; i < sensors->count; ++i) {
-        AMT103Handle encoder = sensors->encoders[i];
-        if (encoder == NULL) {
-            continue;
-        }
-        AMT103State state = {};
-        portENTER_CRITICAL(&encoder->lock);
-        state.count = encoder->count;
-        state.invalidTransitions = encoder->invalidTransitions;
-        state.timestampUs = esp_timer_get_time();
-        portEXIT_CRITICAL(&encoder->lock);
-
-        int64_t countsPerRevolution = (int64_t)encoder->config.pulsesPerRevolution *
-                                     QUADRATURE_COUNTS_PER_PULSE;
-        int64_t wrappedCount = (state.count % countsPerRevolution + countsPerRevolution) %
-                               countsPerRevolution;
-        state.degrees = wrappedCount * degreesPerRevolution / countsPerRevolution;
-        state.valid = true;
-        encoder->snapshot = state;
-    }
-}
-
-AMT103State getEncoderState(AMT103Handle encoder) {
-    AMT103State unavailable = {};
-    return encoder != NULL ? encoder->snapshot : unavailable;
-}
-
-Application* getApplication(void) {
-    static Application instance = {};
-    return &instance;
-}
-
-Application* createApp(const AppConfig* config) {
-    if (config == NULL || config->display.refreshIntervalUs <= 0 ||
-        config->display.rowsPerHeader == 0 || config->idleDelayMs == 0) {
-        return NULL;
-    }
-    Application* app = getApplication();
-    app->config = *config;
-    app->startUs = esp_timer_get_time();
-    app->currentTimeUs = app->startUs;
-    app->nextScreenRefreshUs = app->startUs + config->display.refreshIntervalUs;
-    return app;
-}
+// ************************************************
+// ********************** Setup *******************
+// ************************************************
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    const AppConfig config = {
-        .display = {
-            .refreshIntervalUs = 100000,
-            .rowsPerHeader = 30
-        },
-        .idleDelayMs = 1
-    };
-    Application* app = createApp(&config);
-    if (app == NULL) {
-        Serial.println("Could not create application.");
-        return;
-    }
+    Application* app = &applicationState;
+    app->screenRefreshUs = 100000;
+    app->rowsPerHeader = 30;
+    app->idleDelayMs = 1;
+    app->startUs = esp_timer_get_time();
+    app->nextScreenRefreshUs = app->startUs + app->screenRefreshUs;
 
     const AMT103Config leftConfig = {
         .description = "Left",
-        .pinA = 5,
-        .pinB = 4,
+        .pinA = Pin_LeftEncoder_ChannelA,
+        .pinB = Pin_LeftEncoder_ChannelB,
         .pulsesPerRevolution = 2048,
         .directionSign = 1
     };
-    if (!createAmtEncoder(&app->sensors.encoders[LEFT_ENCODER], &leftConfig)) {
+    if (!createAmtEncoder(&app->sensors.amtEncoders[LEFT_ENCODER], &leftConfig)) {
         Serial.println("Could not create Left encoder.");
         return;
     }
-    ++app->sensors.count;
+    ++app->sensors.amtCount;
+    app->sensors.items[Sensor_LeftAngle] = {
+        .name = "Left angle",
+        .type = SensorType_AMT103,
+        .driverIndex = LEFT_ENCODER
+    };
 
     const AMT103Config rightConfig = {
         .description = "Right",
-        .pinA = 7,
-        .pinB = 6,
+        .pinA = Pin_RightEncoder_ChannelA,
+        .pinB = Pin_RightEncoder_ChannelB,
         .pulsesPerRevolution = 2048,
         .directionSign = 1
     };
-    if (!createAmtEncoder(&app->sensors.encoders[RIGHT_ENCODER], &rightConfig)) {
+    if (!createAmtEncoder(&app->sensors.amtEncoders[RIGHT_ENCODER], &rightConfig)) {
         Serial.println("Could not create Right encoder.");
         return;
     }
-    ++app->sensors.count;
+    ++app->sensors.amtCount;
+    app->sensors.items[Sensor_RightAngle] = {
+        .name = "Right angle",
+        .type = SensorType_AMT103,
+        .driverIndex = RIGHT_ENCODER
+    };
 
+    const uint32_t magneticBusFrequencyHz = 100000;
+    const uint16_t magneticBusTimeoutMs = 5;
+    if (!Wire.begin(Pin_Magnetic_SDA, Pin_Magnetic_SCL, magneticBusFrequencyHz)) {
+        Serial.println("Could not start magnetic encoder I2C bus.");
+        return;
+    }
+    Wire.setTimeOut(magneticBusTimeoutMs);
+
+    const MT6701Config magneticConfig = {
+        .description = "Magnetic",
+        .bus = &Wire,
+        .address = 0x06,
+        .directionSign = 1,
+        .zeroOffsetDegrees = 0.0,
+        .sampleIntervalUs = 10000
+    };
+    if (!createMt6701Encoder(&app->sensors.magneticEncoders[MAGNETIC_ENCODER], &magneticConfig)) {
+        Serial.println("Could not create magnetic encoder.");
+        return;
+    }
+    ++app->sensors.magneticCount;
+    app->sensors.items[Sensor_MagneticAngle] = {
+        .name = "Magnetic angle",
+        .type = SensorType_MT6701,
+        .driverIndex = MAGNETIC_ENCODER
+    };
     app->ready = true;
 }
 
-void printScreen(Application* app) {
-    const int64_t microsecondsPerMillisecond = 1000;
-    const uint64_t millisecondsPerSecond = 1000;
-    AMT103State left = getEncoderState(app->sensors.encoders[LEFT_ENCODER]);
-    AMT103State right = getEncoderState(app->sensors.encoders[RIGHT_ENCODER]);
-    uint64_t elapsedMs = (app->currentTimeUs - app->startUs) / microsecondsPerMillisecond;
+// ************************************************
+// ***************** Display Instructions **********
+// ************************************************
 
-    if (app->displayedRows++ % app->config.display.rowsPerHeader == 0) {
-        Serial.println("   Time (s) |       Left (deg) |      Right (deg)");
+void formatAngle(char* text, size_t capacity, double degrees, bool valid) {
+    if (valid) {
+        snprintf(text, capacity, "%.2f", degrees);
+    } else {
+        snprintf(text, capacity, "ERR");
     }
-    Serial.printf("%8llu.%03u | %16.2f | %16.2f\n",
-                  (unsigned long long)(elapsedMs / millisecondsPerSecond),
-                  (unsigned)(elapsedMs % millisecondsPerSecond),
-                  left.degrees, right.degrees);
 }
 
+void printScreen(Application* app, int64_t currentTimeUs) {
+    const int64_t microsecondsPerMillisecond = 1000;
+    const uint64_t millisecondsPerSecond = 1000;
+    const size_t angleTextCapacity = 16;
+    AngleReading left = getSensorReading(&app->sensors, Sensor_LeftAngle);
+    AngleReading right = getSensorReading(&app->sensors, Sensor_RightAngle);
+    AngleReading magnetic = getSensorReading(&app->sensors, Sensor_MagneticAngle);
+    char leftText[angleTextCapacity];
+    char rightText[angleTextCapacity];
+    char magneticText[angleTextCapacity];
+    formatAngle(leftText, sizeof(leftText), left.degrees, left.valid);
+    formatAngle(rightText, sizeof(rightText), right.degrees, right.valid);
+    formatAngle(magneticText, sizeof(magneticText), magnetic.degrees, magnetic.valid);
+    uint64_t elapsedMs = (currentTimeUs - app->startUs) / microsecondsPerMillisecond;
+
+    if (app->displayedRows++ % app->rowsPerHeader == 0) {
+        Serial.printf("   Time (s) | %14s | %14s | %14s\n",
+                      app->sensors.items[Sensor_LeftAngle].name,
+                      app->sensors.items[Sensor_RightAngle].name,
+                      app->sensors.items[Sensor_MagneticAngle].name);
+        Serial.println("            |      (deg)     |      (deg)     |      (deg)");
+    }
+    Serial.printf("%8llu.%03u | %14s | %14s | %14s\n",
+                  (unsigned long long)(elapsedMs / millisecondsPerSecond),
+                  (unsigned)(elapsedMs % millisecondsPerSecond),
+                  leftText, rightText, magneticText);
+}
+
+// ************************************************
+// ***************** Main Loop ********************
+// ************************************************
+
 void loop() {
-    Application* app = getApplication();
+    // ready the app
+    Application* app = &applicationState;
     if (!app->ready) {
         const uint32_t initializationFailureDelayMs = 100;
         delay(initializationFailureDelayMs);
         return;
     }
 
+    // update time
+    int64_t currentTimeUs = esp_timer_get_time();
+
+    //update sensors
     updateSensors(&app->sensors);
 
-    app->currentTimeUs = esp_timer_get_time();
-    if (app->currentTimeUs < app->nextScreenRefreshUs) {
-        delay(app->config.idleDelayMs);
+
+    // print screen
+    if (currentTimeUs < app->nextScreenRefreshUs) {
+        delay(app->idleDelayMs);
         return;
     }
-    printScreen(app);
-    app->nextScreenRefreshUs = app->currentTimeUs + app->config.display.refreshIntervalUs;
+    printScreen(app, currentTimeUs);
+    app->nextScreenRefreshUs = currentTimeUs + app->screenRefreshUs;
+
+    // etc
 }
